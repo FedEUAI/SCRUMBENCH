@@ -172,10 +172,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 If you use SCRUMBENCH in your research, please cite:
 
 ```bibtex
-@misc{scrumbench2024,
+@misc{scrumbench2025,
   title={SCRUMBENCH: A Multi-Agent Collaboration Benchmark for Software Engineering},
-  author={Your Name},
-  year={2024},
+  author={E-Group Research},
+  year={2025},
   url={https://github.com/FedEUAI/SCRUMBENCH}
 }
 ```
@@ -189,8 +189,7 @@ If you use SCRUMBENCH in your research, please cite:
 
 - **Issues**: [GitHub Issues](https://github.com/FedEUAI/SCRUMBENCH/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/FedEUAI/SCRUMBENCH/discussions)
-- **Email**: your.email@example.com
 
 ---
 
-**Status**: 🚧 Active Development | **Version**: 0.1.0 | **Last Updated**: December 2024
+**Status**: 🚧 Active Development | **Version**: 0.1.0 | **Last Updated**: December 2025
