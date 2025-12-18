@@ -1,0 +1,945 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SCRUMBENCH | Experiment Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+    <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@100..900&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Geist', sans-serif;
+            background-color: #0a0a0a;
+            color: #ededed;
+            overflow: hidden;
+        }
+
+        .glass {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+        }
+
+        .glass-dark {
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.03);
+        }
+
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+
+        .scrollbar-custom::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .scrollbar-custom::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .scrollbar-custom::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+        }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            background: transparent;
+        }
+
+        input[type="range"]::-webkit-slider-runnable-track {
+            height: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 16px;
+            width: 16px;
+            border-radius: 50%;
+            background: #fff;
+            margin-top: -6px;
+            box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+        }
+    </style>
+</head>
+
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+        const {
+            LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar
+        } = Recharts;
+
+        const API_BASE = "http://localhost:8000";
+
+        // --- Helper Components ---
+        const Icon = ({ name, className = "w-5 h-5" }) => {
+            // Using a simpler approach: Lucide icons can be accessed via lucide.icons[name]
+            // We'll render the SVG directly if available, or fall back to a placeholder
+            if (window.lucide && window.lucide.icons && window.lucide.icons[name]) {
+                const icon = window.lucide.icons[name];
+                // The icon is an array [tag, attributes, children]
+                // We'll just use the lucide.createIcons targeting a ref to be safe
+                const ref = React.useRef(null);
+                useEffect(() => {
+                    if (ref.current && window.lucide) {
+                        window.lucide.createIcons({
+                            icons: { [name]: window.lucide.icons[name] },
+                            nameAttr: 'data-lucide-target'
+                        });
+                    }
+                }, [name]);
+                return <span ref={ref} data-lucide-target={name} className={className} style={{ display: 'inline-block' }}></span>;
+            }
+            return <span className={className} style={{ display: 'inline-block', opacity: 0.2 }}>•</span>;
+        };
+
+        // Simple Error Boundary
+        class ErrorBoundary extends React.Component {
+            constructor(props) {
+                super(props);
+                this.state = { hasError: false };
+            }
+            static getDerivedStateFromError(error) { return { hasError: true }; }
+            componentDidCatch(error, errorInfo) { console.error(error, errorInfo); }
+            render() {
+                if (this.state.hasError) {
+                    return <div className="p-8 text-rose-400">Something went wrong. Please refresh.</div>;
+                }
+                return this.props.children;
+            }
+        }
+
+        const GlassCard = ({ children, className = "" }) => (
+            <div className={`glass p-6 ${className}`}>
+                {children}
+            </div>
+        );
+
+        // --- Layout Components ---
+        const Sidebar = ({ experiments, selectedRunId, onSelect, onRunNew }) => (
+            <div className="w-80 h-screen border-r border-white/5 flex flex-col p-4">
+                <div className="flex items-center gap-3 mb-8 px-2">
+                    <div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center text-black font-bold">SB</div>
+                    <h1 className="text-xl font-semibold tracking-tight">SCRUMBENCH</h1>
+                </div>
+
+                <button
+                    onClick={onRunNew}
+                    className="w-full py-3 mb-6 bg-white text-black rounded-lg font-medium hover:bg-gray-200 transition-colors flex items-center justify-center gap-2"
+                >
+                    <Icon name="play" className="w-4 h-4" />
+                    Run Experiment
+                </button>
+
+                <div className="flex-1 overflow-y-auto scrollbar-custom">
+                    <h2 className="text-xs font-semibold text-white/40 uppercase tracking-widest mb-4 px-2">Recent Runs</h2>
+                    <div className="space-y-1">
+                        {experiments.map(run => {
+                            const isSelected = selectedRunId === run.id;
+                            const progress = run.total_tasks > 0 ? (run.successful_tasks / run.total_tasks) * 100 : 0;
+
+                            return (
+                                <div
+                                    key={run.id}
+                                    onClick={() => onSelect(run.id)}
+                                    className={`p-3 rounded-lg cursor-pointer transition-all ${isSelected ? 'bg-white/10 border border-white/10' : 'hover:bg-white/5 border border-transparent'
+                                        }`}
+                                >
+                                    <div className="flex items-center justify-between mb-1">
+                                        <span className="font-medium truncate pr-2">{run.name}</span>
+                                        {run.status === 'running' && (
+                                            <div className="flex items-center gap-1.5">
+                                                <span className="text-[10px] text-emerald-400 font-bold uppercase animate-pulse">Live</span>
+                                                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="flex items-center justify-between text-xs text-white/40 mb-2">
+                                        <span>{new Date(run.timestamp).toLocaleDateString()}</span>
+                                        <span>ICS: {run.mean_ics.toFixed(2)}</span>
+                                    </div>
+                                    {run.status === 'running' && (
+                                        <div className="space-y-1">
+                                            <div className="flex justify-between text-[10px] text-white/30">
+                                                <span>Progress</span>
+                                                <span>{run.successful_tasks}/{run.total_tasks} completed</span>
+                                            </div>
+                                            <div className="w-full bg-white/5 h-1 rounded-full overflow-hidden">
+                                                <div
+                                                    className="bg-emerald-500 h-full transition-all duration-500"
+                                                    style={{ width: `${Math.max(5, progress)}%` }}
+                                                ></div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            </div>
+        );
+
+        const KanbanBoard = ({ initialBoard = [], turns = [], currentTurnIndex }) => {
+            const columns = {
+                'todo': 'Todo',
+                'in_progress': 'In Progress',
+                'done': 'Done'
+            };
+
+            const board = useMemo(() => {
+                if (!initialBoard) return [];
+                const state = JSON.parse(JSON.stringify(initialBoard));
+                const activeTurns = (turns || []).slice(0, currentTurnIndex + 1);
+
+                activeTurns.forEach(turn => {
+                    if (turn.tool_calls) {
+                        turn.tool_calls.forEach(call => {
+                            if (call.name === 'claim_task') {
+                                const task = state.find(t => t.id === call.arguments.task_id);
+                                if (task) {
+                                    task.status = 'in_progress';
+                                    task.assigned_to = turn.agent_id || turn.agent;
+                                }
+                            } else if (call.name === 'update_task_status') {
+                                const task = state.find(t => t.id === call.arguments.task_id);
+                                if (task) task.status = call.arguments.status;
+                            }
+                        });
+                    }
+                });
+
+                return state;
+            }, [initialBoard, turns, currentTurnIndex]);
+
+            return (
+                <div className="grid grid-cols-3 gap-6 h-full p-2">
+                    {Object.entries(columns).map(([id, label]) => (
+                        <div key={id} className="flex flex-col h-full bg-white/[0.02] rounded-xl p-4 border border-white/5">
+                            <h3 className="text-sm font-semibold mb-6 flex items-center gap-2">
+                                <span className={`w-1.5 h-1.5 rounded-full ${id === 'todo' ? 'bg-white/20' : id === 'in_progress' ? 'bg-amber-400' : 'bg-emerald-400'
+                                    }`}></span>
+                                {label}
+                                <span className="ml-auto text-white/20 text-xs">{board.filter(t => t.status === id).length}</span>
+                            </h3>
+                            <div className="flex-1 overflow-y-auto space-y-4 scrollbar-hide">
+                                {board.filter(t => t.status === id).map(task => (
+                                    <div key={task.id} className="glass p-4 text-sm hover:border-white/20 transition-all cursor-default group">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <span className="text-[10px] font-bold text-white/30 uppercase tracking-tighter">{task.id}</span>
+                                            <span className={`px-2 py-0.5 rounded text-[10px] ${task.difficulty === 'hard' ? 'bg-rose-500/10 text-rose-400' :
+                                                task.difficulty === 'medium' ? 'bg-amber-500/10 text-amber-400' : 'bg-blue-500/10 text-blue-400'
+                                                }`}>
+                                                {task.difficulty}
+                                            </span>
+                                        </div>
+                                        <h4 className="font-medium mb-1 group-hover:text-white transition-colors capitalize">{task.title.replace(/_/g, ' ')}</h4>
+                                        {task.assigned_to && (
+                                            <div className="mt-3 flex items-center gap-2">
+                                                <div className="w-5 h-5 rounded-full bg-white/10 flex items-center justify-center text-[10px] border border-white/10">
+                                                    {(task.assigned_to || 'A').charAt(0).toUpperCase()}
+                                                </div>
+                                                <span className="text-[10px] text-white/40">{task.assigned_to}</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            );
+        };
+
+        const TraceViewer = ({ turns = [], currentTurnIndex, tokenSummary = {}, selectedAgent, onAgentFilter }) => {
+            const [expandedTurns, setExpandedTurns] = useState(new Set());
+
+            const toggleTurn = (idx) => {
+                const newExpanded = new Set(expandedTurns);
+                if (newExpanded.has(idx)) {
+                    newExpanded.delete(idx);
+                } else {
+                    newExpanded.add(idx);
+                }
+                setExpandedTurns(newExpanded);
+            };
+
+            const filteredTurns = selectedAgent
+                ? turns.filter(t => (t.agent_id || t.agent) === selectedAgent)
+                : turns;
+
+            const agents = [...new Set(turns.map(t => t.agent_id || t.agent || 'unknown'))];
+            const agentColors = {
+                'agent_1': 'bg-blue-500/20 border-blue-500/40 text-blue-300',
+                'agent_2': 'bg-purple-500/20 border-purple-500/40 text-purple-300',
+            };
+
+            return (
+                <div className="h-full flex flex-col overflow-hidden bg-black/20 rounded-xl border border-white/5">
+                    <div className="p-4 border-b border-white/5 bg-white/[0.02]">
+                        <div className="flex items-center justify-between mb-3">
+                            <h3 className="text-sm font-medium">Agent Log</h3>
+                            <span className="text-xs text-white/40">Turn {currentTurnIndex + 1} of {turns.length}</span>
+                        </div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                                onClick={() => onAgentFilter(null)}
+                                className={`text-[10px] px-2 py-1 rounded border transition-colors ${!selectedAgent ? 'bg-white/10 border-white/20 text-white' : 'border-white/5 text-white/40 hover:text-white/60'
+                                    }`}
+                            >
+                                All Agents
+                            </button>
+                            {agents.map(agent => (
+                                <button
+                                    key={agent}
+                                    onClick={() => onAgentFilter(agent)}
+                                    className={`text-[10px] px-2 py-1 rounded border transition-colors ${selectedAgent === agent ? 'bg-white/10 border-white/20 text-white' : 'border-white/5 text-white/40 hover:text-white/60'
+                                        }`}
+                                >
+                                    {agent}
+                                </button>
+                            ))}
+                        </div>
+                        {Object.keys(tokenSummary).length > 0 && (
+                            <div className="mt-3 pt-3 border-t border-white/5 flex gap-4">
+                                {Object.entries(tokenSummary).map(([agent, tokens]) => (
+                                    <div key={agent} className="text-[10px]">
+                                        <span className="text-white/40">{agent}:</span>
+                                        <span className="ml-1 text-white/60">
+                                            {(tokens.prompt || 0).toLocaleString()}↑ / {(tokens.completion || 0).toLocaleString()}↓
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-custom">
+                        {filteredTurns.slice(0, currentTurnIndex + 1).map((turn, idx) => {
+                            const actualIdx = turns.indexOf(turn);
+                            const isExpanded = expandedTurns.has(actualIdx);
+                            const agent = turn.agent_id || turn.agent || 'Agent';
+                            const agentColor = agentColors[agent] || 'bg-white/5 border-white/10 text-white/80';
+
+                            return (
+                                <div key={actualIdx} className="space-y-2">
+                                    <div className="flex items-start gap-2">
+                                        <div className={`w-7 h-7 rounded-md flex items-center justify-center text-[10px] border font-bold ${agentColor}`}>
+                                            {agent.charAt(0).toUpperCase()}
+                                        </div>
+                                        <div className="flex-1">
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <span className="text-xs font-bold text-white/70">{agent}</span>
+                                                <span className="text-[10px] text-white/30">Turn {turn.turn}</span>
+                                                {turn.timestamp && (
+                                                    <span className="text-[10px] text-white/20">
+                                                        {new Date(turn.timestamp * 1000).toLocaleTimeString()}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <div className="text-sm text-white/50 leading-relaxed">
+                                                {turn.content || turn.status || 'No content'}
+                                            </div>
+                                            {turn.tool_calls && turn.tool_calls.length > 0 && (
+                                                <button
+                                                    onClick={() => toggleTurn(actualIdx)}
+                                                    className="mt-2 text-[10px] text-white/40 hover:text-white/60 flex items-center gap-1"
+                                                >
+                                                    <Icon name={isExpanded ? "chevron-down" : "chevron-right"} className="w-3 h-3" />
+                                                    {turn.tool_calls.length} tool call{turn.tool_calls.length > 1 ? 's' : ''}
+                                                </button>
+                                            )}
+                                            {isExpanded && turn.tool_calls && turn.tool_calls.map((call, cidx) => (
+                                                <div key={cidx} className="mt-2 p-3 rounded-lg bg-white/[0.03] border border-white/5">
+                                                    <div className="flex items-center gap-2 text-white/60 mb-2 text-xs">
+                                                        <Icon name="zap" className="w-3 h-3" />
+                                                        <span className="font-mono font-bold">{call.name}</span>
+                                                    </div>
+                                                    <pre className="text-[10px] text-white/40 font-mono overflow-x-auto">
+                                                        {JSON.stringify(call.arguments, null, 2)}
+                                                    </pre>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Main App ---
+        const App = () => {
+            const [experiments, setExperiments] = useState([]);
+            const [selectedRunId, setSelectedRunId] = useState(null);
+            const [selectedInstanceId, setSelectedInstanceId] = useState(null);
+            const [experimentData, setExperimentData] = useState(null);
+            const [taskDetails, setTaskDetails] = useState(null);
+            const [currentTurn, setCurrentTurn] = useState(0);
+            const [isRunModalOpen, setIsRunModalOpen] = useState(false);
+            const [baselines, setBaselines] = useState([]);
+            const [analytics, setAnalytics] = useState(null);
+            const [selectedAgent, setSelectedAgent] = useState(null);
+            const [showTestResults, setShowTestResults] = useState(false);
+            const [isAutoFollow, setIsAutoFollow] = useState(true);
+
+            useEffect(() => {
+                fetchExperiments();
+                fetchBaselines();
+            }, []);
+
+            useEffect(() => {
+                if (selectedRunId) {
+                    fetchExperiment(selectedRunId);
+                    fetchAnalytics(selectedRunId);
+                }
+            }, [selectedRunId]);
+
+            useEffect(() => {
+                if (selectedRunId && selectedInstanceId) {
+                    fetchTaskDetails(selectedRunId, selectedInstanceId);
+                }
+            }, [selectedRunId, selectedInstanceId]);
+
+            useEffect(() => {
+                setSelectedInstanceId(null);
+                setTaskDetails(null);
+            }, [selectedRunId]);
+
+            // Poll task details if running
+            useEffect(() => {
+                let interval;
+                if (selectedRunId && selectedInstanceId && experimentData && experimentData.status === 'running') {
+                    interval = setInterval(() => {
+                        fetchTaskDetails(selectedRunId, selectedInstanceId);
+                    }, 4000);
+                }
+                return () => clearInterval(interval);
+            }, [selectedRunId, selectedInstanceId, experimentData?.status]);
+
+            useEffect(() => {
+                const interval = setInterval(() => {
+                    const hasRunning = experiments.some(e => e.status === 'running');
+                    if (hasRunning) {
+                        fetchExperiments();
+                        if (selectedRunId) {
+                            const run = experiments.find(e => e.id === selectedRunId);
+                            if (run && run.status === 'running') {
+                                fetchExperiment(selectedRunId);
+                            }
+                        }
+                    }
+                }, 3000);
+                return () => clearInterval(interval);
+            }, [experiments, selectedRunId]);
+
+            const fetchExperiments = async () => {
+                const res = await fetch(`${API_BASE}/experiments`);
+                setExperiments(await res.json());
+            };
+
+            const fetchBaselines = async () => {
+                const res = await fetch(`${API_BASE}/baselines`);
+                setBaselines(await res.json());
+            };
+
+            const fetchAnalytics = async (id) => {
+                try {
+                    const res = await fetch(`${API_BASE}/experiments/${id}/analytics`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        setAnalytics(data);
+                    }
+                } catch (e) {
+                    console.error('Failed to fetch analytics:', e);
+                }
+            };
+
+            const fetchExperiment = async (id) => {
+                const res = await fetch(`${API_BASE}/experiments/${id}`);
+                if (!res.ok) return;
+                const data = await res.json();
+                setExperimentData(data);
+
+                // Auto-follow latest task
+                if (data.task_results && data.task_results.length > 0) {
+                    if (!selectedInstanceId || isAutoFollow) {
+                        const latestId = data.task_results[data.task_results.length - 1].instance_id;
+                        if (selectedInstanceId !== latestId) {
+                            setSelectedInstanceId(latestId);
+                        }
+                    }
+                }
+            };
+
+            const fetchTaskDetails = async (runId, instanceId) => {
+                const res = await fetch(`${API_BASE}/experiments/${runId}/tasks/${instanceId}`);
+                if (!res.ok) {
+                    setTaskDetails(null);
+                    return;
+                }
+                const data = await res.json();
+
+                // Only auto-advance turn if we were already at the end
+                if (data.trace && data.trace.turns) {
+                    const wasAtEnd = !taskDetails || currentTurn === taskDetails.trace.turns.length - 1;
+                    setTaskDetails(data);
+                    if (wasAtEnd) {
+                        setCurrentTurn(data.trace.turns.length - 1);
+                    }
+                } else {
+                    setTaskDetails(data);
+                }
+            };
+
+            const currentKanban = useMemo(() => {
+                if (!taskDetails || !taskDetails.initial_kanban || !taskDetails.trace || !taskDetails.trace.turns) return [];
+                const state = JSON.parse(JSON.stringify(taskDetails.initial_kanban));
+                const turns = taskDetails.trace.turns.slice(0, currentTurn + 1);
+
+                turns.forEach(turn => {
+                    if (turn.tool_calls) {
+                        turn.tool_calls.forEach(call => {
+                            if (call.name === 'claim_task') {
+                                const task = state.find(t => t.id === call.arguments.task_id);
+                                if (task) {
+                                    task.status = 'in_progress';
+                                    task.assigned_to = turn.agent_id || turn.agent;
+                                }
+                            } else if (call.name === 'update_task_status') {
+                                const task = state.find(t => t.id === call.arguments.task_id);
+                                if (task) task.status = call.arguments.status;
+                            }
+                        });
+                    }
+                });
+                return state;
+            }, [taskDetails, currentTurn]);
+
+            const runNewExperiment = async (baselineId) => {
+                await fetch(`${API_BASE}/run?baseline=${baselineId}`, { method: 'POST' });
+                setIsRunModalOpen(false);
+                setTimeout(fetchExperiments, 2000);
+            };
+
+            return (
+                <div className="flex h-screen w-screen bg-[#0a0a0a]">
+                    <Sidebar
+                        experiments={experiments}
+                        selectedRunId={selectedRunId}
+                        onSelect={setSelectedRunId}
+                        onRunNew={() => setIsRunModalOpen(true)}
+                    />
+
+                    <main className="flex-1 flex flex-col overflow-hidden">
+                        {experimentData ? (
+                            <div className="flex-1 flex flex-col p-8 overflow-hidden">
+                                {/* Header / Summary Stats */}
+                                <div className="flex items-center justify-between mb-8">
+                                    <div>
+                                        <h2 className="text-3xl font-bold tracking-tight mb-2">{experimentData.experiment_name}</h2>
+                                        <p className="text-white/40 text-sm">{experimentData.description}</p>
+                                    </div>
+                                    <div className="flex gap-4">
+                                        {(experimentData.task_results || []).length < experimentData.total_tasks && (
+                                            <div className="glass px-6 py-3 flex flex-col justify-center min-w-[200px]">
+                                                <div className="flex justify-between text-[10px] text-white/40 font-bold uppercase tracking-widest mb-2">
+                                                    <span>Overall Progress</span>
+                                                    <span>{Math.round(((experimentData.task_results || []).length / (experimentData.total_tasks || 1)) * 100)}%</span>
+                                                </div>
+                                                <div className="w-full bg-white/5 h-1.5 rounded-full overflow-hidden">
+                                                    <div
+                                                        className="bg-white h-full transition-all duration-1000 shadow-[0_0_10px_rgba(255,255,255,0.3)]"
+                                                        style={{ width: `${((experimentData.task_results || []).length / (experimentData.total_tasks || 1)) * 100}%` }}
+                                                    ></div>
+                                                </div>
+                                                <div className="text-[10px] text-white/20 mt-1 text-center">
+                                                    {(experimentData.task_results || []).filter(r => r.status === 'completed').length} / {experimentData.total_tasks} completed
+                                                </div>
+                                            </div>
+                                        )}
+                                        <div className="glass px-6 py-3 text-center">
+                                            <div className="text-xs text-white/40 mb-1">Mean ICS</div>
+                                            <div className="text-xl font-bold">{(experimentData.mean_ics || 0).toFixed(3)}</div>
+                                        </div>
+                                        <div className="glass px-6 py-3 text-center">
+                                            <div className="text-xs text-white/40 mb-1">Success Rate</div>
+                                            <div className="text-xl font-bold">{((experimentData.successful_tasks / (experimentData.total_tasks || 1)) * 100).toFixed(0)}%</div>
+                                        </div>
+                                        {analytics && analytics.token_timeline && analytics.token_timeline.length > 0 && (
+                                            <div className="glass px-6 py-3 text-center">
+                                                <div className="text-xs text-white/40 mb-1">Total Tokens</div>
+                                                <div className="text-xl font-bold">
+                                                    {analytics.token_timeline.reduce((sum, t) => sum + t.tokens, 0).toLocaleString()}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="flex-1 flex gap-8 min-h-0">
+
+                                {/* Analytics & Visualizations Section */}
+                                {analytics && (
+                                    <div className="glass p-6 mb-6">
+                                        <h3 className="text-sm font-bold text-white/60 mb-4 flex items-center gap-2">
+                                            <Icon name="bar-chart-2" className="w-4 h-4" />
+                                            Analytics & Insights
+                                        </h3>
+                                        <div className="grid grid-cols-2 gap-6">
+                                            {/* Success Rate by Difficulty */}
+                                            {analytics.success_by_difficulty && Object.keys(analytics.success_by_difficulty).length > 0 && (
+                                                <div className="bg-black/20 p-4 rounded-lg border border-white/5">
+                                                    <h4 className="text-xs font-bold text-white/40 mb-3">Success Rate by Difficulty</h4>
+                                                    <div className="space-y-3">
+                                                        {Object.entries(analytics.success_by_difficulty).map(([diff, data]) => (
+                                                            <div key={diff} className="space-y-1">
+                                                                <div className="flex items-center justify-between text-xs">
+                                                                    <span className={`font-medium capitalize ${
+                                                                        diff === 'hard' ? 'text-rose-400' :
+                                                                        diff === 'medium' ? 'text-amber-400' :
+                                                                        'text-blue-400'
+                                                                    }`}>{diff}</span>
+                                                                    <span className="text-white/60">
+                                                                        {data.successful}/{data.total} ({data.success_rate.toFixed(0)}%)
+                                                                    </span>
+                                                                </div>
+                                                                <div className="h-2 bg-white/5 rounded-full overflow-hidden">
+                                                                    <div 
+                                                                        className={`h-full transition-all ${
+                                                                            diff === 'hard' ? 'bg-rose-500' :
+                                                                            diff === 'medium' ? 'bg-amber-500' :
+                                                                            'bg-blue-500'
+                                                                        }`}
+                                                                        style={{width: `${data.success_rate}%`}}
+                                                                    />
+                                                                </div>
+                                                                <div className="text-[10px] text-white/30">
+                                                                    Mean ICS: {data.mean_ics.toFixed(3)}
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {/* Token Usage Timeline */}
+                                            {analytics.token_timeline && analytics.token_timeline.length > 0 && (
+                                                <div className="bg-black/20 p-4 rounded-lg border border-white/5">
+                                                    <h4 className="text-xs font-bold text-white/40 mb-3">Token Usage Over Time</h4>
+                                                    <div className="h-32">
+                                                        <ResponsiveContainer width="100%" height="100%">
+                                                            <LineChart data={analytics.token_timeline}>
+                                                                <XAxis 
+                                                                    dataKey="instance_id" 
+                                                                    tick={{fontSize: 8, fill: 'rgba(255,255,255,0.3)'}}
+                                                                    hide
+                                                                />
+                                                                <YAxis 
+                                                                    tick={{fontSize: 8, fill: 'rgba(255,255,255,0.3)'}}
+                                                                    width={40}
+                                                                />
+                                                                <Tooltip 
+                                                                    contentStyle={{backgroundColor: '#000', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '10px'}}
+                                                                    labelStyle={{color: 'rgba(255,255,255,0.6)'}}
+                                                                />
+                                                                <Line 
+                                                                    type="monotone" 
+                                                                    dataKey="tokens" 
+                                                                    stroke="#3b82f6" 
+                                                                    strokeWidth={2}
+                                                                    dot={{r: 2}}
+                                                                />
+                                                            </LineChart>
+                                                        </ResponsiveContainer>
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {/* Agent Activity */}
+                                            {analytics.agent_activity && Object.keys(analytics.agent_activity).length > 0 && (
+                                                <div className="bg-black/20 p-4 rounded-lg border border-white/5">
+                                                    <h4 className="text-xs font-bold text-white/40 mb-3">Agent Activity</h4>
+                                                    <div className="space-y-2">
+                                                        {Object.entries(analytics.agent_activity).map(([agent, data]) => (
+                                                            <div key={agent} className="flex items-center justify-between text-xs">
+                                                                <span className="text-white/60">{agent}</span>
+                                                                <span className="text-white/40">{data.turns} turns</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {/* Test Results Summary */}
+                                            {experimentData.task_results && experimentData.task_results.length > 0 && (
+                                                <div className="bg-black/20 p-4 rounded-lg border border-white/5">
+                                                    <h4 className="text-xs font-bold text-white/40 mb-3">Test Results Summary</h4>
+                                                    <div className="space-y-2 text-xs">
+                                                        <div className="flex justify-between">
+                                                            <span className="text-white/40">Total Tasks:</span>
+                                                            <span className="text-white/60">{experimentData.task_results.length}</span>
+                                                        </div>
+                                                        <div className="flex justify-between">
+                                                            <span className="text-emerald-400">Successful:</span>
+                                                            <span className="text-emerald-400 font-bold">
+                                                                {experimentData.task_results.filter(t => t.success).length}
+                                                            </span>
+                                                        </div>
+                                                        <div className="flex justify-between">
+                                                            <span className="text-rose-400">Failed:</span>
+                                                            <span className="text-rose-400 font-bold">
+                                                                {experimentData.task_results.filter(t => !t.success).length}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+                                    {/* Left: Task Instances & Logs */}
+                                    <div className="w-1/3 flex flex-col gap-6 overflow-hidden">
+                                        <div className="h-1/3 glass p-4 flex flex-col">
+                                            <div className="flex items-center justify-between mb-4">
+                                                <h3 className="text-xs font-bold text-white/30 uppercase tracking-widest">Task Instances</h3>
+                                                <button
+                                                    onClick={() => setIsAutoFollow(!isAutoFollow)}
+                                                    className={`text-[10px] px-2 py-1 rounded border transition-colors ${isAutoFollow ? 'bg-white/10 border-white/20 text-white' : 'border-white/5 text-white/20 hover:text-white/40'
+                                                        }`}
+                                                >
+                                                    {isAutoFollow ? 'Auto-Follow ON' : 'Auto-Follow OFF'}
+                                                </button>
+                                            </div>
+                                            <div className="flex-1 overflow-y-auto space-y-2 scrollbar-custom">
+                                                {(experimentData.task_results || []).map(task => (
+                                                    <div
+                                                        key={task.instance_id}
+                                                        onClick={() => {
+                                                            if (task.status !== 'todo') {
+                                                                setSelectedInstanceId(task.instance_id);
+                                                                setIsAutoFollow(false);
+                                                            }
+                                                        }}
+                                                        className={`p-3 rounded-lg border transition-all flex items-center justify-between ${task.status === 'todo' ? 'opacity-40 cursor-not-allowed border-white/5 bg-white/[0.01]' :
+                                                            selectedInstanceId === task.instance_id ? 'border-white/20 bg-white/10 cursor-pointer' :
+                                                                'border-white/5 hover:border-white/10 bg-white/[0.02] cursor-pointer'
+                                                            }`}
+                                                    >
+                                                        <div className="flex flex-col">
+                                                            <span className="text-sm font-medium truncate w-40">{task.instance_id}</span>
+                                                            <span className="text-[10px] text-white/40 uppercase tracking-widest">{task.difficulty}</span>
+                                                        </div>
+                                                        {task.status === 'todo' ? (
+                                                            <span className="text-white/20">
+                                                                <Icon name="clock" className="w-4 h-4" />
+                                                            </span>
+                                                        ) : task.status === 'in_progress' ? (
+                                                            <div className="w-4 h-4 rounded-full border-2 border-white/10 border-t-amber-400 animate-spin" />
+                                                        ) : (
+                                                            <span className={task.success ? 'text-emerald-400' : 'text-rose-400'}>
+                                                                <Icon name={task.success ? "check-circle" : "x-circle"} className="w-4 h-4" />
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                                {(experimentData.task_results || []).length === 0 && (
+                                                    <div className="text-center py-8 text-white/10 text-xs italic">
+                                                        Waiting for first task results...
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                        {taskDetails && (
+                                            taskDetails.status === 'pending' ? (
+                                                <div className="flex-1 flex flex-col items-center justify-center text-white/40 space-y-4">
+                                                    <div className="w-12 h-12 rounded-full border-2 border-white/10 border-t-white/60 animate-spin" />
+                                                    <p className="text-lg font-medium">Task in progress...</p>
+                                                    <p className="text-sm">Agent is working. Trace details will appear shortly.</p>
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    <div className="flex-1 overflow-hidden flex flex-col">
+                                                        <TraceViewer
+                                                            turns={taskDetails.trace.turns}
+                                                            currentTurnIndex={currentTurn}
+                                                            tokenSummary={taskDetails.token_summary || {}}
+                                                            selectedAgent={selectedAgent}
+                                                            onAgentFilter={setSelectedAgent}
+                                                        />
+                                                    </div>
+                                                    {taskDetails.diagnostics && Object.keys(taskDetails.diagnostics).length > 0 && (
+                                                        <div className="mt-4">
+                                                            <button
+                                                                onClick={() => setShowTestResults(!showTestResults)}
+                                                                className="w-full px-4 py-2 bg-white/5 hover:bg-white/10 rounded-lg border border-white/10 text-sm flex items-center justify-between transition-colors"
+                                                            >
+                                                                <span className="flex items-center gap-2">
+                                                                    <Icon name="file-text" className="w-4 h-4" />
+                                                                    Test Results
+                                                                    {taskDetails.diagnostics.outcome && (
+                                                                        <span className={`ml-2 px-2 py-0.5 rounded text-xs ${taskDetails.diagnostics.outcome === 'success'
+                                                                                ? 'bg-emerald-500/20 text-emerald-400'
+                                                                                : 'bg-rose-500/20 text-rose-400'
+                                                                            }`}>
+                                                                            {taskDetails.diagnostics.outcome}
+                                                                        </span>
+                                                                    )}
+                                                                </span>
+                                                                <Icon name={showTestResults ? "chevron-up" : "chevron-down"} className="w-4 h-4" />
+                                                            </button>
+                                                            {showTestResults && (
+                                                                <div className="mt-2 p-4 bg-black/40 rounded-lg border border-white/5 max-h-64 overflow-y-auto scrollbar-custom">
+                                                                    <pre className="text-[10px] text-white/60 font-mono whitespace-pre-wrap">
+                                                                        {taskDetails.diagnostics.pytest_stdout || 'No test output available'}
+                                                                    </pre>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </>
+                                            )
+                                        )}
+                                    </div>
+
+                                    {/* Right: Board & Timeline */}
+                                    <div className="flex-1 flex flex-col gap-6 overflow-hidden">
+                                        {taskDetails ? (
+                                            <div className="flex-1 glass p-6 flex flex-col overflow-hidden">
+                                                <div className="flex items-center justify-between mb-8">
+                                                    <div className="flex items-center gap-3">
+                                                        <h3 className="text-lg font-semibold">
+                                                            {taskDetails.initial_kanban && taskDetails.initial_kanban.length > 5 ? 'Experiment Overview' : 'Live Board Representation'}
+                                                        </h3>
+                                                        {taskDetails.initial_kanban && taskDetails.initial_kanban.length > 5 && (
+                                                            <span className="text-[10px] px-2 py-1 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                                                                {taskDetails.initial_kanban.length} Tasks
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <div className="flex items-center gap-4 text-xs flex-wrap">
+                                                        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/5">
+                                                            <Icon name="message-square" className="w-3 h-3 text-white/40" />
+                                                            <span>{taskDetails.trace.messages_exchanged || 0} Messages</span>
+                                                        </div>
+                                                        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/5">
+                                                            <Icon name="cpu" className="w-3 h-3 text-white/40" />
+                                                            <span>ICS: {(experimentData?.task_results?.find(r => r.instance_id === selectedInstanceId)?.integration_competence_score || 0).toFixed(3)}</span>
+                                                        </div>
+                                                        {taskDetails.token_summary && Object.keys(taskDetails.token_summary).length > 0 && (
+                                                            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/5">
+                                                                <Icon name="zap" className="w-3 h-3 text-white/40" />
+                                                                <span>
+                                                                    {Object.values(taskDetails.token_summary).reduce((sum, t) => sum + (t.prompt || 0) + (t.completion || 0), 0).toLocaleString()} tokens
+                                                                </span>
+                                                            </div>
+                                                        )}
+                                                        {taskDetails.metadata && taskDetails.metadata.difficulty && (
+                                                            <div className={`px-3 py-1.5 rounded-full border ${taskDetails.metadata.difficulty === 'hard' ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' :
+                                                                    taskDetails.metadata.difficulty === 'medium' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' :
+                                                                        'bg-blue-500/10 text-blue-400 border-blue-500/20'
+                                                                }`}>
+                                                                {taskDetails.metadata.difficulty}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+
+                                                <div className="flex-1 overflow-hidden min-h-0">
+                                                    <KanbanBoard
+                                                        initialBoard={taskDetails.initial_kanban}
+                                                        turns={taskDetails.trace.turns}
+                                                        currentTurnIndex={currentTurn}
+                                                    />
+                                                </div>
+
+                                                <div className="mt-8 px-2 py-6 border-t border-white/5">
+                                                    <div className="flex items-center justify-between mb-4">
+                                                        <span className="text-xs text-white/40 font-medium">Progress Timeline</span>
+                                                        <span className="text-[10px] px-2 py-1 rounded border border-white/10 font-mono">Turn {currentTurn + 1} / {taskDetails.trace.turns.length}</span>
+                                                    </div>
+                                                    <input
+                                                        type="range"
+                                                        min="0"
+                                                        max={taskDetails.trace.turns.length - 1}
+                                                        value={currentTurn}
+                                                        onChange={(e) => setCurrentTurn(parseInt(e.target.value))}
+                                                        className="w-full cursor-pointer"
+                                                    />
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="flex-1 glass flex items-center justify-center text-white/20 italic">
+                                                Select a task to view execution details
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="flex-1 flex flex-col items-center justify-center p-8 opacity-40">
+                                <Icon name="layout" className="w-12 h-12 mb-4" />
+                                <div className="text-xl font-light">Select an experiment to start</div>
+                            </div>
+                        )}
+                    </main>
+
+                    {/* Run Experiment Modal */}
+                    {isRunModalOpen && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md px-4">
+                            <div className="glass w-full max-w-xl p-8 overflow-hidden max-h-[80vh] flex flex-col shadow-2xl">
+                                <h3 className="text-2xl font-bold mb-6">Trigger New Experiment</h3>
+                                <div className="flex-1 overflow-y-auto space-y-4 scrollbar-custom pr-2">
+                                    {baselines.map(b => (
+                                        <div
+                                            key={b.id}
+                                            onClick={() => runNewExperiment(b.id)}
+                                            className="p-5 rounded-xl border border-white/5 bg-white/[0.02] hover:bg-white/[0.05] hover:border-white/20 transition-all cursor-pointer group"
+                                        >
+                                            <div className="flex items-center justify-between mb-2">
+                                                <span className="font-semibold text-white group-hover:text-white transition-colors capitalize">{b.name.replace(/_/g, ' ')}</span>
+                                                <Icon name="chevron-right" className="w-4 h-4 text-white/20 group-hover:text-white/60" />
+                                            </div>
+                                            <p className="text-sm text-white/40 line-clamp-2">{b.description}</p>
+                                        </div>
+                                    ))}
+                                </div>
+                                <button
+                                    onClick={() => setIsRunModalOpen(false)}
+                                    className="mt-8 px-4 py-2 text-white/40 hover:text-white transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(
+            <ErrorBoundary>
+                <App />
+            </ErrorBoundary>
+        );
+    </script>
+</body>
+
+</html>
